@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== Custom Global Styles (Optional but Recommended) ===== */
+
+/* Set smooth font rendering and consistent background */
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+  font-family: 'Inter', sans-serif;
+}
+
+/* Center the app content on screen (for clean layout) */
+#root {
+  @apply flex flex-col items-center justify-start min-h-screen;
+}
+
+/* Headings styling */
+h1, h2, h3, h4 {
+  @apply font-semibold text-gray-800;
+}
+
+/* Buttons (can override Tailwind base styles) */
+button {
+  @apply px-4 py-2 rounded-lg font-medium transition-all;
+}
+
+button:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Input fields */
+input[type="text"], input[type="number"], input[type="email"] {
+  @apply border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500;
+}
+
+/* Card containers (poll boxes, question cards, etc.) */
+.card {
+  @apply bg-white shadow-md rounded-2xl p-6 w-full max-w-md mx-auto;
+}
+
+/* Simple hover state for interactive items */
+.option-btn:hover {
+  @apply bg-blue-100;
+}
