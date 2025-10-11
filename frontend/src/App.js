@@ -27,7 +27,7 @@ function App() {
             <Route path="/student/start" element={<StudentStart />} />
             <Route path="/student/wait" element={<WaitingScreen />} />
             <Route path="/student/results" element={<StudentResults />} />
-            <Route path="/student results-chat" element={<ResultsWithChat />} />
+            <Route path="/student/results-chat" element={<ResultsWithChat />} />
             <Route path="/kicked" element={<KickedOut />} />
 
             <Route path="/teacher" element={<RoleSelection />} />
