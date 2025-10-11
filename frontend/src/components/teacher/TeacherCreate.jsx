@@ -1,6 +1,8 @@
 // src/components/teacher/TeacherCreate.jsx
-import React, { useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { SocketContext } from '../../context/SocketContext';
+import { PollContext } from '../../context/PollContext';
 
 const emptyOptions = [
   { id: 1, text: '' , correct: false },
@@ -11,7 +13,30 @@ export default function TeacherCreate() {
   const [question, setQuestion] = useState('');
   const [timer, setTimer] = useState(60);
   const [options, setOptions] = useState(emptyOptions);
+
+  const socket = useContext(SocketContext);
+  const { setPoll } = useContext(PollContext);
   const navigate = useNavigate();
+
+  const waitingRedirect = useRef(false);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const onPollStarted = (serverPoll) => {
+      // Save canonical poll from server and go live once
+      if (waitingRedirect.current) {
+        setPoll(serverPoll);
+        navigate('/teacher/live');
+        waitingRedirect.current = false;
+      }
+    };
+
+    socket.on('poll_started', onPollStarted);
+    return () => {
+      socket.off('poll_started', onPollStarted);
+    };
+  }, [socket, setPoll, navigate]);
 
   const addOption = () => {
     setOptions((prev) => [
@@ -24,9 +49,26 @@ export default function TeacherCreate() {
     setOptions((prev) => prev.map(o => o.id === id ? { ...o, ...patch } : o));
   };
 
+  const isValid = () =>
+    question.trim().length > 0 &&
+    options.length >= 2 &&
+    options.every(o => o.text.trim().length > 0);
+
   const askQuestion = () => {
-    // send to server here, then go live with returned poll id
-    navigate('/teacher/live', { state: { question, options, timer } });
+    if (!isValid() || !socket) return;
+
+    const payload = {
+      question: question.trim(),
+      timer,
+      options: options.map(({ text, correct }) => ({
+        text: text.trim(),
+        correct: Boolean(correct),
+      })),
+    };
+
+    // Mark awaiting server ack; redirect on poll_started
+    waitingRedirect.current = true;
+    socket.emit('teacher_create_poll', payload);
   };
 
   return (
@@ -43,21 +85,18 @@ export default function TeacherCreate() {
       </p>
 
       <div className="mt-10 grid grid-cols-1 gap-6 max-w-4xl">
-        {/* Enter your question */}
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="font-semibold">Enter your question</label>
-            <div className="relative">
-              <select
-                className="border rounded-lg px-3 py-2 text-sm"
-                value={timer}
-                onChange={(e) => setTimer(Number(e.target.value))}
-              >
-                {[30, 45, 60, 90].map(s => (
-                  <option key={s} value={s}>{s} seconds</option>
-                ))}
-              </select>
-            </div>
+            <select
+              className="border rounded-lg px-3 py-2 text-sm"
+              value={timer}
+              onChange={(e) => setTimer(Number(e.target.value))}
+            >
+              {[30, 45, 60, 90].map(s => (
+                <option key={s} value={s}>{s} seconds</option>
+              ))}
+            </select>
           </div>
           <div className="relative">
             <textarea
@@ -74,7 +113,6 @@ export default function TeacherCreate() {
           </div>
         </div>
 
-        {/* Edit Options */}
         <div className="grid grid-cols-1 md:grid-cols-[1fr,220px] gap-6">
           <div>
             <div className="font-semibold mb-2">Edit Options</div>
@@ -128,12 +166,11 @@ export default function TeacherCreate() {
         </div>
       </div>
 
-      {/* Bottom bar */}
       <div className="fixed bottom-6 left-0 right-0 flex justify-center">
         <button
           onClick={askQuestion}
-          className="px-8 py-3 rounded-full text-white font-semibold bg-gradient-to-r from-secondary to-primary shadow"
-          disabled={!question.trim() || options.some(o => !o.text.trim())}
+          className="px-8 py-3 rounded-full text-white font-semibold bg-gradient-to-r from-secondary to-primary shadow disabled:opacity-50"
+          disabled={!isValid()}
         >
           Ask Question
         </button>
