@@ -1,22 +1,25 @@
-import { useLocation } from "react-router-dom";
-import { useNavigate } from "react-router-dom";
-
-const navigate = useNavigate();
-
-useEffect(() => {
-  socket.on("kicked", () => {
-    navigate("/kicked");
-  });
-
-  return () => {
-    socket.off("kicked");
-  };
-}, [socket]);
-
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useContext } from "react";
+import { SocketContext } from "../context/SocketContext";
 
 export default function WaitingScreen() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const socket = useContext(SocketContext);
+
   const studentName = location.state?.studentName || "Student";
+
+  // ✅ Kick detection
+  useEffect(() => {
+    socket.on("kicked", () => {
+      navigate("/kicked");
+    });
+
+    return () => {
+      socket.off("kicked");
+    };
+  }, [socket, navigate]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-white text-grayDark px-4">
