@@ -1,1 +1,0 @@
-# Polarity---Live-Polling-System
