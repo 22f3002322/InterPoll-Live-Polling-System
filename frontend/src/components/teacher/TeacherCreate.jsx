@@ -4,69 +4,85 @@ import { useNavigate } from 'react-router-dom';
 import { SocketContext } from '../../context/SocketContext';
 import { PollContext } from '../../context/PollContext';
 
-const emptyOptions = [
-  { id: 1, text: '' , correct: false },
-  { id: 2, text: '' , correct: false },
+const initialOptions = [
+  { id: 1, text: '', correct: false },
+  { id: 2, text: '', correct: false },
 ];
 
 export default function TeacherCreate() {
   const [question, setQuestion] = useState('');
   const [timer, setTimer] = useState(60);
-  const [options, setOptions] = useState(emptyOptions);
+  const [options, setOptions] = useState(initialOptions);
 
   const socket = useContext(SocketContext);
   const { setPoll } = useContext(PollContext);
   const navigate = useNavigate();
 
+  // Prevent duplicate redirects if poll_started fires multiple times
   const waitingRedirect = useRef(false);
+
+  // Keep a stable ref to the latest options/question to avoid stale closures in prod
+  const latest = useRef({ question: '', timer: 60, options: initialOptions });
+  useEffect(() => {
+    latest.current = { question, timer, options };
+  }, [question, timer, options]);
 
   useEffect(() => {
     if (!socket) return;
 
     const onPollStarted = (serverPoll) => {
-      // Save canonical poll from server and go live once
-      if (waitingRedirect.current) {
-        setPoll(serverPoll);
-        navigate('/teacher/live');
-        waitingRedirect.current = false;
-      }
+      if (!waitingRedirect.current) return;
+      waitingRedirect.current = false;
+      setPoll?.(serverPoll);
+      navigate('/teacher/live', { replace: true });
+    };
+
+    const onDisconnect = () => {
+      // If a teacher clicked "Ask Question" but socket dropped, reset flag
+      waitingRedirect.current = false;
     };
 
     socket.on('poll_started', onPollStarted);
+    socket.on('disconnect', onDisconnect);
     return () => {
       socket.off('poll_started', onPollStarted);
+      socket.off('disconnect', onDisconnect);
     };
   }, [socket, setPoll, navigate]);
 
   const addOption = () => {
-    setOptions((prev) => [
-      ...prev,
-      { id: prev.length + 1, text: '', correct: false },
-    ]);
+    // Functional setState avoids stale state in production
+    setOptions((prev) => {
+      const nextId = prev.length === 0 ? 1 : Math.max(...prev.map((o) => o.id)) + 1;
+      return [...prev, { id: nextId, text: '', correct: false }];
+    });
   };
 
   const setOpt = (id, patch) => {
-    setOptions((prev) => prev.map(o => o.id === id ? { ...o, ...patch } : o));
+    setOptions((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
   };
 
-  const isValid = () =>
-    question.trim().length > 0 &&
-    options.length >= 2 &&
-    options.every(o => o.text.trim().length > 0);
+  const isValid = () => {
+    const q = latest.current.question.trim();
+    const opts = latest.current.options;
+    return q.length > 0 && opts.length >= 2 && opts.every((o) => o.text.trim().length > 0);
+  };
 
   const askQuestion = () => {
-    if (!isValid() || !socket) return;
+    if (!socket) return;
+    if (!isValid()) return;
+    if (waitingRedirect.current) return; // avoid double click
 
+    const { question: q, timer: t, options: opts } = latest.current;
     const payload = {
-      question: question.trim(),
-      timer,
-      options: options.map(({ text, correct }) => ({
+      question: q.trim(),
+      timer: Number(t),
+      options: opts.map(({ text, correct }) => ({
         text: text.trim(),
         correct: Boolean(correct),
       })),
     };
 
-    // Mark awaiting server ack; redirect on poll_started
     waitingRedirect.current = true;
     socket.emit('teacher_create_poll', payload);
   };
@@ -93,8 +109,10 @@ export default function TeacherCreate() {
               value={timer}
               onChange={(e) => setTimer(Number(e.target.value))}
             >
-              {[30, 45, 60, 90].map(s => (
-                <option key={s} value={s}>{s} seconds</option>
+              {[30, 45, 60, 90].map((s) => (
+                <option key={s} value={s}>
+                  {s} seconds
+                </option>
               ))}
             </select>
           </div>
@@ -119,7 +137,9 @@ export default function TeacherCreate() {
             <div className="space-y-4">
               {options.map((o, i) => (
                 <div key={o.id} className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-full grid place-items-center bg-primary text-white font-bold">{i + 1}</div>
+                  <div className="w-7 h-7 rounded-full grid place-items-center bg-primary text-white font-bold">
+                    {i + 1}
+                  </div>
                   <input
                     value={o.text}
                     onChange={(e) => setOpt(o.id, { text: e.target.value })}
@@ -129,7 +149,11 @@ export default function TeacherCreate() {
                 </div>
               ))}
             </div>
-            <button onClick={addOption} className="mt-4 text-primary border border-primary px-4 py-2 rounded-lg">
+            <button
+              type="button"
+              onClick={addOption}
+              className="mt-4 text-primary border border-primary px-4 py-2 rounded-lg"
+            >
               + Add More option
             </button>
           </div>
@@ -168,11 +192,13 @@ export default function TeacherCreate() {
 
       <div className="fixed bottom-6 left-0 right-0 flex justify-center">
         <button
+          type="button"
           onClick={askQuestion}
           className="px-8 py-3 rounded-full text-white font-semibold bg-gradient-to-r from-secondary to-primary shadow disabled:opacity-50"
-          disabled={!isValid()}
+          disabled={!isValid() || waitingRedirect.current}
+          aria-busy={waitingRedirect.current ? 'true' : 'false'}
         >
-          Ask Question
+          {waitingRedirect.current ? 'Starting…' : 'Ask Question'}
         </button>
       </div>
     </div>
