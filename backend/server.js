@@ -22,9 +22,6 @@ const io = new Server(server, {
 });
 
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
-
-
-app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
 
 let currentPoll = null;
@@ -138,5 +135,6 @@ app.get("/history", (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
