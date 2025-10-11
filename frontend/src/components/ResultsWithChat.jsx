@@ -1,39 +1,23 @@
 // src/components/ResultsWithChat.jsx
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { SocketContext } from "../context/SocketContext";
-import { useNavigate } from "react-router-dom";
-
-const navigate = useNavigate();
-
-useEffect(() => {
-  socket.on("kicked", () => {
-    navigate("/kicked");
-  });
-
-  return () => {
-    socket.off("kicked");
-  };
-}, [socket]);
-
 
 const Bar = ({ idx, pct, active, label }) => (
   <div className="flex items-center gap-3 my-3">
     <div className="w-7 h-7 rounded-full grid place-items-center bg-grayLight text-grayDark font-bold">
       {idx}
     </div>
-
-    <div className="relative flex-1 h-11 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+    <div className="relative flex-1 h-11 rounded-lg border border-gray-200 overflow-hidden bg-grayLight">
       <div
         className={`h-full ${active ? "bg-primary" : "bg-primaryLight"} transition-all duration-500 ease-out`}
         style={{ width: `${pct}%` }}
       />
       {label ? (
-        <div className="absolute inset-0 flex items-center px-3 text-white font-bold pointer-events-none">
+        <div className="absolute inset-0 flex items-center px-3 text-white font-bold">
           {label}
         </div>
       ) : null}
     </div>
-
     <div className="w-12 text-right font-bold text-gray-800">{pct}%</div>
   </div>
 );
@@ -41,21 +25,24 @@ const Bar = ({ idx, pct, active, label }) => (
 export default function ResultsWithChat() {
   const socket = useContext(SocketContext);
 
-  // results state
+  // poll data
   const [questionText, setQuestionText] = useState("Awaiting question...");
   const [timerText, setTimerText] = useState("00:00");
-  const [results, setResults] = useState([]); // [{ idx, pct, active, label }]
-  // chat state
-  const [chatOpen, setChatOpen] = useState(false);
-  const [messages, setMessages] = useState([]); // [{ sender, text }]
+  const [results, setResults] = useState([]);
+
+  // chat & participants
+  const [popupOpen, setPopupOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("chat"); // 'chat' or 'participants'
+  const [messages, setMessages] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [draft, setDraft] = useState("");
+
   const chatListRef = useRef(null);
   const inputRef = useRef(null);
 
-  // helper: map raw counts -> array with percentages
+  // map backend results to UI bars
   const mapResultsToBars = (resultCount) => {
-    // resultCount example: { Mars: 3, Earth: 1 }
-    const total = Object.values(resultCount).reduce((s, n) => s + n, 0);
+    const total = Object.values(resultCount).reduce((sum, n) => sum + n, 0);
     return Object.entries(resultCount).map(([label, count], idx) => ({
       idx: idx + 1,
       label,
@@ -65,52 +52,49 @@ export default function ResultsWithChat() {
   };
 
   useEffect(() => {
-    // poll started => update question
-    const onStarted = (poll) => {
+    socket.on("poll_started", (poll) => {
       setQuestionText(poll?.question ?? "New Question");
-      setResults([]); // reset
+      setResults([]);
       setTimerText(poll?.timer ?? "00:00");
-    };
+    });
 
-    const onUpdate = (data) => {
+    socket.on("poll_update", (data) => {
       setResults(mapResultsToBars(data));
-    };
+    });
 
-    const onFinal = (data) => {
+    socket.on("poll_results", (data) => {
       setResults(mapResultsToBars(data));
-    };
+    });
 
-    const onChatMessage = (payload) => {
-      // payload: { sender: "Name", text: "Hello" }
+    socket.on("chat_message", (payload) => {
       setMessages((m) => [...m, payload]);
-    };
+    });
 
-    socket.on("poll_started", onStarted);
-    socket.on("poll_update", onUpdate);
-    socket.on("poll_results", onFinal);
-    socket.on("chat_message", onChatMessage);
+    socket.on("participants_update", (list) => {
+      setParticipants(list);
+    });
 
     return () => {
-      socket.off("poll_started", onStarted);
-      socket.off("poll_update", onUpdate);
-      socket.off("poll_results", onFinal);
-      socket.off("chat_message", onChatMessage);
+      socket.off("poll_started");
+      socket.off("poll_update");
+      socket.off("poll_results");
+      socket.off("chat_message");
+      socket.off("participants_update");
     };
   }, [socket]);
 
-  // autoscroll chat to bottom when messages change
   useEffect(() => {
     if (chatListRef.current) {
       chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
     }
-  }, [messages, chatOpen]);
+  }, [messages, popupOpen, activeTab]);
 
-  // toggle chat popup; focus input when opened
-  const toggleChat = () => {
-    setChatOpen((s) => {
-      const next = !s;
-      // focus input a tick after open
-      if (next) setTimeout(() => inputRef.current?.focus(), 100);
+  const togglePopup = () => {
+    setPopupOpen((o) => {
+      const next = !o;
+      if (next) {
+        setTimeout(() => inputRef.current?.focus(), 100);
+      }
       return next;
     });
   };
@@ -118,11 +102,8 @@ export default function ResultsWithChat() {
   const sendMessage = () => {
     const text = draft.trim();
     if (!text) return;
-    // Emit minimal payload - backend will attach socket.data.name
     socket.emit("send_chat", { text });
     setDraft("");
-    // Optionally, optimistically add (frontend only) - but we rely on server broadcast
-    // setMessages(m => [...m, { sender: "You", text }]);
   };
 
   const handleKey = (e) => {
@@ -141,7 +122,7 @@ export default function ResultsWithChat() {
 
         <div className="p-5">
           <div className="flex items-center gap-3 text-gray-700 font-semibold">
-            <span>Question</span>
+            <span>Results</span>
             <span className="text-grayMid">⏱ {timerText}</span>
           </div>
 
@@ -159,72 +140,109 @@ export default function ResultsWithChat() {
             Wait for the teacher to ask a new question..
           </div>
 
-          {/* Floating chat button */}
+          {/* Chat / Participants Toggle Button */}
           <button
-            onClick={toggleChat}
-            className="fixed bottom-7 right-7 w-[60px] h-[60px] rounded-full text-white shadow-xl bg-primary grid place-items-center"
+            onClick={togglePopup}
+            className="fixed bottom-7 right-7 w-[60px] h-[60px] rounded-full text-white shadow-xl bg-primary"
             title="Open chat"
           >
             💬
           </button>
 
-          {/* Chat popup (renders above UI when chatOpen) */}
-          {chatOpen && (
+          {/* Popup */}
+          {popupOpen && (
             <div className="fixed bottom-20 right-6 w-[320px] max-w-[92vw] bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden">
-              {/* Header */}
+              {/* Header + Tabs */}
               <div className="px-4 py-3 bg-primary text-white flex items-center justify-between">
-                <div className="font-semibold">Class Chat</div>
+                <div className="font-semibold">
+                  {activeTab === "chat" ? "Class Chat" : "Participants"}
+                </div>
                 <button
-                  onClick={() => setChatOpen(false)}
+                  onClick={() => setPopupOpen(false)}
                   className="text-white opacity-90 hover:opacity-100"
-                  title="Close chat"
                 >
                   ✕
                 </button>
               </div>
 
-              {/* Message list */}
-              <div
-                ref={chatListRef}
-                className="h-[240px] overflow-auto px-3 py-3 space-y-3 bg-gray-50"
-              >
-                {messages.length === 0 ? (
-                  <div className="text-center text-grayMid">No messages yet — say hi 👋</div>
-                ) : (
-                  messages.map((m, i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gray-200 grid place-items-center text-sm font-semibold text-grayDark">
-                        {m.sender?.[0] ?? "U"}
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-grayDark">{m.sender}</div>
-                        <div className="text-sm text-gray-700">{m.text}</div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Input */}
-              <div className="px-3 py-3 border-t border-gray-100 bg-white">
-                <textarea
-                  ref={inputRef}
-                  rows={1}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={handleKey}
-                  placeholder="Type your message and press Enter"
-                  className="w-full border border-gray-200 rounded-md p-2 text-sm resize-none focus:outline-none"
-                />
-                <div className="flex justify-end mt-2">
-                  <button
-                    onClick={sendMessage}
-                    className="bg-primary px-4 py-1 rounded-md text-white text-sm"
-                  >
-                    Send
-                  </button>
+              {/* Tab Buttons */}
+              <div className="flex border-b border-gray-100">
+                <div
+                  className={`flex-1 text-center py-2 cursor-pointer ${
+                    activeTab === "chat" ? "font-semibold text-grayDark" : "text-grayMid"
+                  }`}
+                  onClick={() => setActiveTab("chat")}
+                >
+                  Chat
+                </div>
+                <div
+                  className={`flex-1 text-center py-2 cursor-pointer ${
+                    activeTab === "participants" ? "font-semibold text-grayDark" : "text-grayMid"
+                  }`}
+                  onClick={() => setActiveTab("participants")}
+                >
+                  Participants
                 </div>
               </div>
+
+              {/* Chat Content */}
+              {activeTab === "chat" && (
+                <>
+                  <div
+                    ref={chatListRef}
+                    className="h-[240px] overflow-auto px-3 py-3 space-y-3 bg-gray-50"
+                  >
+                    {messages.length === 0 ? (
+                      <div className="text-center text-grayMid">No messages yet — say hi 👋</div>
+                    ) : (
+                      messages.map((m, i) => (
+                        <div key={i} className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-gray-200 grid place-items-center text-sm font-semibold text-grayDark">{m.sender?.[0] ?? "U"}</div>
+                          <div>
+                            <div className="text-sm font-semibold text-grayDark">{m.sender}</div>
+                            <div className="text-sm text-gray-700">{m.text}</div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {/* Chat Input */}
+                  <div className="px-3 py-3 border-t border-gray-100 bg-white">
+                    <textarea
+                      ref={inputRef}
+                      rows={1}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={handleKey}
+                      placeholder="Type your message and press Enter"
+                      className="w-full border border-gray-200 rounded-md p-2 text-sm resize-none focus:outline-none"
+                    />
+                    <div className="flex justify-end mt-2">
+                      <button
+                        onClick={sendMessage}
+                        className="bg-primary px-4 py-1 rounded-md text-white text-sm"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Participants Content */}
+              {activeTab === "participants" && (
+                <div className="h-[300px] overflow-auto px-3 py-3 bg-gray-50">
+                  {participants.length === 0 ? (
+                    <div className="text-center text-grayMid">No participants yet...</div>
+                  ) : (
+                    participants.map((name, i) => (
+                      <div key={i} className="py-2 border-b border-gray-200 text-grayDark">
+                        {name}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
