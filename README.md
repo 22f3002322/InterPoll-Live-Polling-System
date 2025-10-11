@@ -1,5 +1,3 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
-
 # Live Polling System
 
 A real‑time classroom polling app that lets teachers create time‑boxed multiple‑choice questions, collect student votes live, show results instantly, chat with the class, and manage participants. The stack is React + Tailwind on the frontend and Node/Express + Socket.IO on the backend. The app is deployment‑ready for Vercel (frontend) and Render (backend).
@@ -171,10 +169,6 @@ backend/
 - Accessibility and keyboard navigation improvements.
 - Better timer synchronization using server timestamps.
 
-
-## License
-
-MIT. Use freely with attribution where appropriate.
 
 ## Acknowledgements
 
