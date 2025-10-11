@@ -21,6 +21,7 @@ app.use(express.json());
 let currentPoll = null;
 let answers = {};
 let totalStudents = 0;
+let history = []; // Store past polls
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
@@ -32,10 +33,20 @@ io.on("connection", (socket) => {
   });
 
   socket.on("student_join", (name) => {
-    socket.data.name = name;
-    totalStudents++;
-    console.log(`${name} joined. Total: ${totalStudents}`);
-  });
+  socket.data.name = name;
+  totalStudents++;
+
+  // ✅ Notify others that a new student joined
+  io.emit("participants_update", getAllParticipants());
+});
+
+// ✅ Helper function to list all connected students
+function getAllParticipants() {
+  return [...io.sockets.sockets.values()]
+    .filter(s => s.data?.name) // only named users
+    .map(s => s.data.name);
+}
+
 
   socket.on("submit_answer", (option) => {
     const name = socket.data.name;
@@ -52,14 +63,33 @@ io.on("connection", (socket) => {
   });
 
   socket.on("teacher_show_results", () => {
-    const finalResults = {};
-    Object.values(answers).forEach(
-      (opt) => (finalResults[opt] = (finalResults[opt] || 0) + 1)
-    );
-    io.emit("poll_results", finalResults);
-  });
+  const finalResults = {};
+  Object.values(answers).forEach(
+    (opt) => (finalResults[opt] = (finalResults[opt] || 0) + 1)
+  );
+
+  if (currentPoll) {
+    const snapshot = {
+      id: Date.now().toString(),
+      question: currentPoll.question,
+      timer: currentPoll.timer,
+      options: currentPoll.options,   // [{text, correct}]
+      counts: finalResults,           // {1:n, 2:n, ...}
+      createdAt: new Date().toISOString(),
+    };
+    history.unshift(snapshot);
+  }
+
+  io.emit("poll_results", finalResults);
+});
+
+  socket.on("teacher_request_history", () => {
+  socket.emit("history_data", history);
+});
+
 
   socket.on("disconnect", () => {
+      io.emit("participants_update", getAllParticipants());
     console.log("User disconnected:", socket.id);
   });
 
@@ -91,6 +121,10 @@ io.on("connection", (socket) => {
 
 app.get("/", (req, res) => {
   res.send("✅ Live Polling Backend Running");
+});
+
+app.get("/history", (req, res) => {
+  res.json(history);
 });
 
 const PORT = process.env.PORT || 5000;
