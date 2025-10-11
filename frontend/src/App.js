@@ -1,8 +1,6 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 
-import TeacherDashboard from "./components/TeacherDashboard";
-import StudentDashboard from "./components/StudentDashboard";
 import RoleSelection from "./components/RoleSelection";
 import StudentStart from "./components/StudentStart";
 import WaitingScreen from "./components/WaitingScreen";
