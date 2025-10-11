@@ -10,14 +10,20 @@ export default function WaitingScreen() {
 
   const studentName = location.state?.studentName || "Student";
 
-  // ✅ Kick detection
   useEffect(() => {
     socket.on("kicked", () => {
       navigate("/kicked");
     });
 
+    // ✅ Redirect when poll starts
+    socket.on("poll_started", (poll) => {
+      console.log("📩 Student received poll_started:", poll);
+      navigate("/student/results", { state: { poll } });
+    });
+
     return () => {
       socket.off("kicked");
+      socket.off("poll_started");
     };
   }, [socket, navigate]);
 
