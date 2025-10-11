@@ -47,6 +47,33 @@ export default function TeacherLive() {
   const [finalCounts, setFinalCounts] = useState(null); // freeze when results shown
   const inputRef = useRef(null);
 
+  useEffect(() => {
+    if (!currentPoll) {
+      console.log("⚠️ No currentPoll found — sending history request as fallback.");
+      socket.emit("teacher_request_history");
+    }
+  }, [currentPoll, socket]);
+  
+  useEffect(() => {
+    socket.on("poll_started", (poll) => {
+      console.log("📩 TeacherLive received poll_started:", poll);
+      setCurrentPoll(poll);
+    });
+  
+    socket.on("history_data", (history) => {
+      if (!currentPoll && history && history[0]) {
+        console.log("⚙️ Fallback to latest history record:", history[0]);
+        setCurrentPoll(history[0]);
+      }
+    });
+  
+    return () => {
+      socket.off("poll_started");
+      socket.off("history_data");
+    };
+  }, [socket, setCurrentPoll, currentPoll]);
+
+  
   // If this screen is loaded directly, rely on the server to have broadcast poll_started recently;
   // also keep a listener to refresh currentPoll in case of reconnect.
   useEffect(() => {
@@ -225,3 +252,4 @@ export default function TeacherLive() {
     </div>
   );
 }
+
