@@ -268,22 +268,22 @@ export default function StudentResults() {
             {currentPoll && (submitted || results.length > 0) && (
               <div>
                 <div className="space-y-2">
-                  {
-                    (results.length > 0 
-                      ? results 
-                      : currentPoll.options.map((o, i) => ({
-                          index: i + 1,
-                          label: o.text,
-                          percent: 0,
-                          active: false
-                        }))
-                    ).map((r) => (
-                      <ResultBar key={r.index} index={r.index} percent={r.percent} active={r.active} label={r.label} />
-                    ))
-                  }
-
+                  {(results.length > 0 ? results : currentPoll.options.map((o, i) => ({
+                    index: i + 1,
+                    label: o.text,
+                    percent: 0,
+                    active: false
+                  }))).map((r) => (
+                    <ResultBar
+                      key={r.index}
+                      index={r.index}
+                      percent={r.percent}
+                      active={r.active}
+                      label={r.label}
+                    />
+                  ))}
                 </div>
-
+            
                 <div className="mt-4 text-grayMid font-semibold">
                   {finalText(currentPoll, results, submitted)}
                 </div>
@@ -386,3 +386,4 @@ function finalText(poll, results, submitted) {
   if (results && results.length > 0) return "Live results — waiting for the teacher to finalize.";
   return "Wait for the teacher to ask a new question..";
 }
+
