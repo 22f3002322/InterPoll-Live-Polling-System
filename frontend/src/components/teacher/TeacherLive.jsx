@@ -1,24 +1,18 @@
-// src/components/StudentResults.jsx
-import React, { useContext, useEffect, useRef, useState } from "react";
-import { SocketContext } from "../context/SocketContext";
+// src/components/teacher/TeacherLive.jsx
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { SocketContext } from "../../context/SocketContext";
+import { PollContext } from "../../context/PollContext";
 
-/**
- * StudentResults (single screen):
- * - Shows question + options while timer runs
- * - Student selects one option and submits
- * - After submit, student sees live results (poll_update / poll_results)
- * - Also supports chat & participants popup (same UI as ResultsWithChat)
- */
-
-const ResultBar = ({ index, percent, active, label }) => (
+/* small presentational row for an option bar */
+const ChoiceRow = ({ idx, label, percent, active }) => (
   <div className="flex items-center gap-3 my-3">
     <div className="w-7 h-7 rounded-full grid place-items-center bg-grayLight text-grayDark font-bold">
-      {index}
+      {idx}
     </div>
-    <div className="relative flex-1 h-11 rounded-lg border border-gray-200 overflow-hidden bg-grayLight">
+    <div className="relative flex-1 h-11 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
       <div
-        className={`h-full ${active ? "bg-primary" : "bg-primaryLight"} transition-all duration-500 ease-out`}
+        className={`${active ? "bg-primary" : "bg-primaryLight"} h-full transition-all duration-500`}
         style={{ width: `${percent}%` }}
       />
       {label ? (
@@ -31,359 +25,281 @@ const ResultBar = ({ index, percent, active, label }) => (
   </div>
 );
 
-export default function StudentResults() {
+/* slide-over panel used for chat / participants */
+const SlidePanel = ({ tab, setTab, children, open }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed right-10 top-24 w-[420px] rounded-lg shadow-2xl border bg-white overflow-hidden z-50">
+      <div className="flex border-b">
+        {["Chat", "Participants"].map((t) => (
+          <button
+            key={t}
+            className={`flex-1 px-4 py-3 font-semibold ${tab === t ? "text-primary border-b-2 border-primary" : "text-grayMid"}`}
+            onClick={() => setTab(t)}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      <div className="p-4 max-h-[420px] overflow-auto">{children}</div>
+    </div>
+  );
+};
+
+export default function TeacherLive() {
   const socket = useContext(SocketContext);
   const navigate = useNavigate();
+  const { currentPoll, setCurrentPoll } = useContext(PollContext);
 
-  // Poll state
-  const [currentPoll, setCurrentPoll] = useState(null); // { question, timer, options: [{text,correct}] }
-  const [secondsLeft, setSecondsLeft] = useState(0);
+  // UI state
+  const [panelTab, setPanelTab] = useState("Chat");
+  const [panelOpen, setPanelOpen] = useState(true);
 
-  // Student state
-  const [selected, setSelected] = useState(null); // option index (1-based)
-  const [submitted, setSubmitted] = useState(false);
-
-  // Results state (array mapped to options)
-  const [results, setResults] = useState([]); // [{ index, label, percent, active }]
-
-  // Chat / participants popup
-  const [popupOpen, setPopupOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("chat");
-  const [messages, setMessages] = useState([]);
   const [participants, setParticipants] = useState([]);
-  const [draft, setDraft] = useState("");
-  const chatListRef = useRef(null);
+  const [messages, setMessages] = useState([]);
+  const [liveCounts, setLiveCounts] = useState({}); // counts updated live via poll_update
+  const [finalCounts, setFinalCounts] = useState(null); // once poll_results arrives, freeze here
+
   const inputRef = useRef(null);
 
-  // keep latest poll ref (avoid stale closures)
-  const pollRef = useRef(null);
-  useEffect(() => {
-    pollRef.current = currentPoll;
-  }, [currentPoll]);
-
-  // Kick detection
+  // Request latest history if page loaded without currentPoll
   useEffect(() => {
     if (!socket) return;
-    const onKicked = () => navigate("/kicked");
-    socket.on("kicked", onKicked);
-    return () => {
-      socket.off("kicked", onKicked);
-    };
-  }, [socket, navigate]);
+    if (!currentPoll) {
+      console.log("TeacherLive: no currentPoll, requesting history fallback");
+      socket.emit("teacher_request_history");
+    }
+  }, [socket, currentPoll]);
 
-  // Utilities: map server result counts (keyed by 1-based index) to bar items using currentPoll options
-  const mapCountsToBars = (countsObj) => {
-    // countsObj might be { "1": 5, "2": 2, ... }
-    const opts = pollRef.current?.options ?? [];
-    const total = Object.values(countsObj || {}).reduce((s, n) => s + (Number(n) || 0), 0);
-    // If backend keys are indices (1,2,3), map to option text
-    return opts.map((opt, i) => {
-      const key = String(i + 1);
-      const count = Number(countsObj?.[key] ?? 0);
-      return {
-        index: i + 1,
-        label: opt.text,
-        percent: total > 0 ? Math.round((count / total) * 100) : 0,
-        active: count > 0,
-      };
-    });
-  };
-
-  // Socket listeners for poll lifecycle, chat, participants, and results
+  // Listen for poll lifecycle and history
   useEffect(() => {
     if (!socket) return;
 
     const onPollStarted = (poll) => {
-      // expected poll: { question, timer, options: [{text, correct}, ...] }
-      console.log("Student: poll_started", poll);
-      setCurrentPoll(poll);
-      setSelected(null);
-      setSubmitted(false);
-      setResults([]); // reset any old results
-      const secs = Number(poll?.timer ?? 0);
-      setSecondsLeft(secs);
+      console.log("TeacherLive: poll_started", poll);
+      setCurrentPoll?.(poll);
+      setLiveCounts({});
+      setFinalCounts(null);
     };
 
-    const onPollUpdate = (counts) => {
-      // counts: { "1": n, "2": m, ... }
-      setResults(mapCountsToBars(counts));
+    const onHistory = (history) => {
+      if (!currentPoll && Array.isArray(history) && history.length > 0) {
+        // Use most recent snapshot from history as fallback
+        const snap = history[0];
+        console.log("TeacherLive: using latest history snapshot", snap);
+        // history snapshot shape in server: { id, question, timer, options, counts, createdAt }
+        // For display we prefer currentPoll shape => map accordingly
+        const pollFromSnap = {
+          question: snap.question,
+          timer: snap.timer,
+          options: snap.options,
+        };
+        setCurrentPoll?.(pollFromSnap);
+        // if snapshot includes counts, treat them as final
+        if (snap.counts) {
+          setFinalCounts(snap.counts);
+        }
+      }
     };
-
-    const onPollResults = (finalCounts) => {
-      setResults(mapCountsToBars(finalCounts));
-    };
-
-    const onChat = (payload) => setMessages((m) => [...m, payload]);
-    const onParticipants = (list) => setParticipants(Array.isArray(list) ? list : []);
 
     socket.on("poll_started", onPollStarted);
-    socket.on("poll_update", onPollUpdate);
-    socket.on("poll_results", onPollResults);
-    socket.on("chat_message", onChat);
-    socket.on("participants_update", onParticipants);
+    socket.on("history_data", onHistory);
 
     return () => {
       socket.off("poll_started", onPollStarted);
-      socket.off("poll_update", onPollUpdate);
-      socket.off("poll_results", onPollResults);
-      socket.off("chat_message", onChat);
-      socket.off("participants_update", onParticipants);
+      socket.off("history_data", onHistory);
     };
-  }, [socket]);
+  }, [socket, currentPoll, setCurrentPoll]);
 
-  // Countdown timer effect
+  // Live updates: poll_update, poll_results, participants_update, chat_message
   useEffect(() => {
-    if (!currentPoll) return;
-    if (secondsLeft <= 0) return;
-    const t = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(t);
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [currentPoll, secondsLeft]);
+    if (!socket) return;
 
-  // Auto-scroll chat
+    const onUpdate = (counts) => {
+      // Only update liveCounts if finalCounts isn't set (soft-freeze)
+      if (!finalCounts) {
+        setLiveCounts(counts || {});
+      }
+    };
+
+    const onResults = (counts) => {
+      // Freeze results (soft freeze)
+      setFinalCounts(counts || {});
+    };
+
+    const onParticipants = (list) => setParticipants(Array.isArray(list) ? list : []);
+    const onChat = (msg) => setMessages((prev) => [...prev, msg]);
+
+    socket.on("poll_update", onUpdate);
+    socket.on("poll_results", onResults);
+    socket.on("participants_update", onParticipants);
+    socket.on("chat_message", onChat);
+
+    return () => {
+      socket.off("poll_update", onUpdate);
+      socket.off("poll_results", onResults);
+      socket.off("participants_update", onParticipants);
+      socket.off("chat_message", onChat);
+    };
+  }, [socket, finalCounts]);
+
+  // Build bars from either liveCounts or finalCounts (finalCounts wins if present)
+  const totalVotes = useMemo(() => {
+    const src = finalCounts ?? liveCounts;
+    return Object.values(src || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+  }, [liveCounts, finalCounts]);
+
+  const bars = useMemo(() => {
+    const opts = currentPoll?.options ?? [];
+    const src = finalCounts ?? liveCounts; // finalCounts freezes
+    return opts.map((opt, i) => {
+      const key = String(i + 1); // server uses 1-based keys
+      const count = Number(src?.[key] ?? 0);
+      const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+      return {
+        idx: i + 1,
+        label: opt?.text ?? `Option ${i + 1}`,
+        percent: pct,
+        active: count > 0,
+      };
+    });
+  }, [currentPoll, liveCounts, finalCounts, totalVotes]);
+
+  // Actions
+  const showResults = () => {
+    if (!socket) return;
+    socket.emit("teacher_show_results");
+  };
+
+  const sendChat = () => {
+    const text = inputRef.current?.value?.trim();
+    if (!text || !socket) return;
+    socket.emit("send_chat", { text });
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const kickStudent = (name) => {
+    if (!socket) return;
+    socket.emit("kick_student", name);
+  };
+
+  const goAskNew = () => {
+    // navigate to create screen to ask a new question
+    navigate("/teacher/create");
+  };
+
+  // Auto-scroll chat when messages change
+  const chatListRef = useRef(null);
   useEffect(() => {
     if (chatListRef.current) {
       chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
     }
-  }, [messages, popupOpen, activeTab]);
-
-  // Toggle popup
-  const togglePopup = () => {
-    setPopupOpen((o) => {
-      const next = !o;
-      if (next) setTimeout(() => inputRef.current?.focus(), 100);
-      return next;
-    });
-  };
-
-  // Send chat
-  const sendMessage = () => {
-    const text = draft.trim();
-    if (!text || !socket) return;
-    socket.emit("send_chat", { text });
-    setDraft("");
-  };
-
-  const handleKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  // Student selects option (before submit)
-  const choose = (idx) => {
-    if (submitted) return;
-    setSelected(idx);
-  };
-
-  // Submit selected answer
-  const submitAnswer = () => {
-    if (!socket || submitted) return;
-    if (!selected) return; // require choice
-    // emit 1-based index as option key - backend aggregates by this key
-    socket.emit("submit_answer", String(selected));
-    setSubmitted(true);
-
-    // Immediately switch to results view by leaving question UI but showing live bars
-    // The server will broadcast poll_update which we already listen to
-  };
-
-  // Helper formatting for timer mm:ss
-  const formatSecs = (s) => {
-    const mm = String(Math.floor(s / 60)).padStart(2, "0");
-    const ss = String(s % 60).padStart(2, "0");
-    return `${mm}:${ss}`;
-  };
-
-  // If no current poll, show awaiting messaging
-  const noPoll = !currentPoll;
+  }, [messages, panelOpen, panelTab]);
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center px-4">
-      <div className="w-[780px] max-w-[96vw] rounded-xl border border-gray-200 shadow-lg overflow-hidden">
-        <div className="bg-[#494949] text-white font-bold px-5 py-3">
-          {currentPoll?.question ?? "Awaiting question..."}
+    <div className="min-h-screen bg-white px-6 py-12 relative">
+      <div className="max-w-[760px] mx-auto">
+        <div className="text-2xl font-semibold mb-4">Question</div>
+
+        <div className="w-full rounded-xl border border-gray-200 shadow-lg overflow-hidden">
+          <div className="bg-[#494949] text-white font-bold px-5 py-3">
+            {currentPoll?.question ?? "Waiting for a poll to start..."}
+          </div>
+
+          <div className="p-5">
+            {bars.length === 0 ? (
+              <div className="text-grayMid">No options yet.</div>
+            ) : (
+              bars.map((r) => <ChoiceRow key={r.idx} {...r} />)
+            )}
+          </div>
         </div>
 
-        <div className="p-8 relative">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3 text-gray-700 font-semibold">
-              <span>Question {currentPoll ? "1" : ""}</span>
-              <span className="text-grayMid">⏱ {currentPoll ? formatSecs(secondsLeft) : "00:00"}</span>
-            </div>
+        <div className="mt-4 flex items-center gap-3 text-grayMid">
+          <div>
+            Total votes: <span className="font-semibold text-grayDark">{totalVotes}</span>
           </div>
 
-          {/* Card containing options or results */}
-          <div className="rounded-lg border border-gray-200 p-4 bg-white">
-            {/* If there is no poll yet */}
-            {noPoll && (
-              <div className="py-10 text-center text-grayMid">
-                Waiting for the teacher to ask a question...
-              </div>
-            )}
+          {finalCounts ? (
+            <span className="text-primary font-semibold">Results locked</span>
+          ) : (
+            <button onClick={showResults} className="text-primary underline underline-offset-2">
+              Show results
+            </button>
+          )}
+        </div>
 
-            {/* If poll exists and student hasn't submitted, show selectable options */}
-            {currentPoll && !submitted && (
-              <div className="space-y-4">
-                {currentPoll.options.map((opt, i) => {
-                  const idx = i + 1;
-                  const isSelected = selected === idx;
-                  return (
-                    <button
-                      key={opt.text + idx}
-                      onClick={() => choose(idx)}
-                      className={`w-full text-left flex items-center gap-4 p-4 rounded-lg border ${
-                        isSelected ? "border-primary bg-primary/10" : "border-gray-200 bg-gray-50"
-                      }`}
-                    >
-                      <div className={`w-8 h-8 rounded-full grid place-items-center ${isSelected ? "bg-primary text-white" : "bg-gray-200 text-grayDark"}`}>
-                        {idx}
-                      </div>
-                      <div className="flex-1 text-grayDark">{opt.text}</div>
-                    </button>
-                  );
-                })}
-
-                <div className="flex justify-end mt-6">
-                  <button
-                    onClick={submitAnswer}
-                    disabled={!selected}
-                    className="px-8 py-3 rounded-full text-white font-semibold bg-gradient-to-r from-secondary to-primary disabled:opacity-50"
-                  >
-                    Submit
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* After submit OR if server already has counts, show live results bars */}
-            {currentPoll && (submitted || results.length > 0) && (
-              <div>
-                <div className="space-y-2">
-                  {
-                    (results.length > 0 
-                      ? results 
-                      : currentPoll.options.map((o, i) => ({
-                          index: i + 1,
-                          label: o.text,
-                          percent: 0,
-                          active: false
-                        }))
-                    ).map((r) => (
-                      <ResultBar key={r.index} index={r.index} percent={r.percent} active={r.active} label={r.label} />
-                    ))
-                  }
-
-                </div>
-
-                <div className="mt-4 text-grayMid font-semibold">
-                  {finalText(currentPoll, results, submitted)}
-                </div>
-              </div>
-            )}
-          </div>
+        <div className="mt-8 flex justify-center">
+          <button
+            onClick={goAskNew}
+            className="px-8 py-3 rounded-full text-white font-semibold bg-gradient-to-r from-primary to-secondary"
+          >
+            + Ask a new question
+          </button>
         </div>
       </div>
 
-      {/* Floating chat button */}
+      {/* Floating panel toggle */}
       <button
-        onClick={togglePopup}
+        onClick={() => setPanelOpen((v) => !v)}
         className="fixed bottom-7 right-7 w-[60px] h-[60px] rounded-full text-white shadow-xl bg-primary"
-        title="Open chat"
+        title="Toggle panel"
       >
         💬
       </button>
 
-      {/* Chat / Participants popup */}
-      {popupOpen && (
-        <div className="fixed bottom-20 right-6 w-[320px] max-w-[92vw] bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden">
-          <div className="px-4 py-3 bg-primary text-white flex items-center justify-between">
-            <div className="font-semibold">{activeTab === "chat" ? "Class Chat" : "Participants"}</div>
-            <button onClick={() => setPopupOpen(false)}>✕</button>
-          </div>
-
-          <div className="flex border-b border-gray-100">
-            <div
-              className={`flex-1 text-center py-2 cursor-pointer ${activeTab === "chat" ? "font-semibold text-grayDark" : "text-grayMid"}`}
-              onClick={() => setActiveTab("chat")}
-            >
-              Chat
+      {/* Slide-over panel */}
+      <SlidePanel tab={panelTab} setTab={setPanelTab} open={panelOpen}>
+        {panelTab === "Chat" ? (
+          <div className="flex flex-col h-full">
+            <div ref={chatListRef} className="flex-1 space-y-3 overflow-auto pr-1">
+              {messages.map((m, i) => (
+                <div key={i} className="mb-2">
+                  <div className="text-xs text-grayMid mb-1">{m.sender || "User"}</div>
+                  <div className={`inline-block px-3 py-2 rounded-lg ${m.sender ? "bg-gray-800 text-white" : "bg-primaryLight text-white"}`}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {messages.length === 0 && <div className="text-center text-grayMid">No messages yet — say hi 👋</div>}
             </div>
-            <div
-              className={`flex-1 text-center py-2 cursor-pointer ${activeTab === "participants" ? "font-semibold text-grayDark" : "text-grayMid"}`}
-              onClick={() => setActiveTab("participants")}
-            >
-              Participants
+
+            <div className="mt-3 flex gap-2">
+              <input ref={inputRef} placeholder="Type a message" className="flex-1 h-11 border rounded-lg px-3" />
+              <button onClick={sendChat} className="px-4 h-11 rounded-lg bg-primary text-white font-semibold">
+                Send
+              </button>
             </div>
           </div>
+        ) : (
+          <div>
+            <div className="grid grid-cols-[1fr_auto] font-semibold text-grayMid pb-2 border-b">
+              <span>Name</span>
+              <span>Action</span>
+            </div>
 
-          {activeTab === "chat" && (
-            <>
-              <div ref={chatListRef} className="h-[240px] overflow-auto px-3 py-3 space-y-3 bg-gray-50">
-                {messages.length === 0 ? (
-                  <div className="text-center text-grayMid">No messages yet — say hi 👋</div>
-                ) : (
-                  messages.map((m, i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gray-200 grid place-items-center text-sm font-semibold text-grayDark">{m.sender?.[0] ?? "U"}</div>
-                      <div>
-                        <div className="text-sm font-semibold text-grayDark">{m.sender}</div>
-                        <div className="text-sm text-gray-700">{m.text}</div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="px-3 py-3 border-t border-gray-100 bg-white">
-                <textarea
-                  ref={inputRef}
-                  rows={1}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={handleKey}
-                  placeholder="Type your message and press Enter"
-                  className="w-full border border-gray-200 rounded-md p-2 text-sm resize-none focus:outline-none"
-                />
-                <div className="flex justify-end mt-2">
-                  <button onClick={sendMessage} className="bg-primary px-4 py-1 rounded-md text-white text-sm">
-                    Send
+            <div className="divide-y">
+              {participants.length === 0 && <div className="py-4 text-grayMid">No participants yet.</div>}
+              {participants.map((p) => (
+                <div key={p} className="grid grid-cols-[1fr_auto] items-center py-3">
+                  <span className="font-semibold text-grayDark">{p}</span>
+                  <button onClick={() => kickStudent(p)} className="text-blue-700 underline underline-offset-2">
+                    Kick out
                   </button>
                 </div>
-              </div>
-            </>
-          )}
-
-          {activeTab === "participants" && (
-            <div className="h-[300px] overflow-auto px-3 py-3 bg-gray-50">
-              {participants.length === 0 ? (
-                <div className="text-center text-grayMid">No participants yet...</div>
-              ) : (
-                participants.map((name, i) => (
-                  <div key={i} className="py-2 border-b border-gray-200 text-grayDark">{name}</div>
-                ))
-              )}
+              ))}
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </SlidePanel>
+
+      {/* History button */}
+      <button
+        onClick={() => navigate("/teacher/history")}
+        className="fixed top-8 right-8 bg-primaryLight text-white px-5 py-2 rounded-full shadow"
+      >
+        👁 View Poll history
+      </button>
     </div>
   );
 }
-
-/* Helper to show footer text under results */
-function finalText(poll, results, submitted) {
-  if (!poll) return "";
-  if (!submitted && (!results || results.length === 0)) return "Waiting for responses...";
-  if (results && results.length > 0) return "Live results — waiting for the teacher to finalize.";
-  return "Wait for the teacher to ask a new question..";
-}
-
