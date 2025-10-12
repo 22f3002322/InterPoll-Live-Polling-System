@@ -18,7 +18,7 @@ export default function WaitingScreen() {
     // ✅ Redirect when poll starts
     socket.on("poll_started", (poll) => {
       console.log("📩 Student received poll_started:", poll);
-      navigate("/student/results-chat", { state: { poll } });
+      navigate("/student/results", { state: { poll } });
     });
 
     return () => {
@@ -44,4 +44,5 @@ export default function WaitingScreen() {
     </div>
   );
 }
+
 
