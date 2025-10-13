@@ -6,9 +6,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const FRONTEND_URL = process.env.FRONTEND_URL || [
+const FRONTEND_URL = process.env.FRONTEND_URL?.split(",") || [
   "http://localhost:3000",
-  "https://interpoll-live.vercel.app",
+  "https://interpoll-live.vercel.app"
 ];
 
 const app = express();
@@ -135,6 +135,7 @@ app.get("/history", (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
 
