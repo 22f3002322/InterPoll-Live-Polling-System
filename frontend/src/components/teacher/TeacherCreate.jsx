@@ -84,6 +84,7 @@ export default function TeacherCreate() {
     };
 
     waitingRedirect.current = true;
+    setPoll?.(payload);
     socket.emit('teacher_create_poll', payload);
   };
 
@@ -205,4 +206,5 @@ export default function TeacherCreate() {
     </div>
   );
 }
+
 
