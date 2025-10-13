@@ -98,6 +98,12 @@ export default function TeacherLive() {
   const inputRef = useRef(null);
   const chatListRef = useRef(null);
 
+  useEffect(() => {
+    if (!currentPoll && pollFromContext) {
+      setCurrentPoll(pollFromContext);
+    }
+  }, []);
+  
   // Request history if we arrived here with no currentPoll (reconnect / hard refresh)
   useEffect(() => {
     if (!socket) return;
@@ -343,3 +349,4 @@ export default function TeacherLive() {
     </div>
   );
 }
+
