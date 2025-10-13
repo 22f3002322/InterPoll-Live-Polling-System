@@ -4,28 +4,63 @@ import { useNavigate } from "react-router-dom";
 import { SocketContext } from "../../context/SocketContext";
 import { PollContext } from "../../context/PollContext";
 
-/* small presentational row for an option bar */
-const ChoiceRow = ({ idx, label, percent, active }) => (
-  <div className="flex items-center gap-3 my-3">
-    <div className="w-7 h-7 rounded-full grid place-items-center bg-grayLight text-grayDark font-bold">
-      {idx}
-    </div>
-    <div className="relative flex-1 h-11 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-      <div
-        className={`${active ? "bg-primary" : "bg-primaryLight"} h-full transition-all duration-500`}
-        style={{ width: `${percent}%` }}
-      />
-      {label ? (
-        <div className="absolute inset-0 flex items-center px-3 text-white font-bold pointer-events-none">
+/**
+ * Visual constants (tailwind-friendly classes)
+ * Adjust these if your theme tokens differ.
+ */
+const PRIMARY_BG = "bg-primary"; // purple fill pre-results
+const PRIMARY_TEXT = "text-primary";
+const CORRECT_BG = "bg-green-500"; // green post-results
+const CORRECT_TEXT = "text-green-600";
+const MUTED_BG = "bg-gray-200"; // muted post-results
+const MUTED_TEXT = "text-gray-600";
+
+/* ChoiceRow — full-width outer pill with inner fill */
+const ChoiceRow = ({ idx, label, percent, finalized, isCorrect }) => {
+  // decide inner fill color after finalization
+  const innerColorClass = finalized
+    ? isCorrect
+      ? CORRECT_BG
+      : MUTED_BG
+    : PRIMARY_BG;
+
+  // label color after finalization
+  const labelColorClass = finalized ? (isCorrect ? CORRECT_TEXT : MUTED_TEXT) : "text-grayDark";
+
+  return (
+    <div className="relative rounded-lg border border-gray-200 bg-white overflow-hidden py-3 px-4">
+      {/* outer visual left circle + text on top of full width background */}
+      <div className="flex items-center gap-4 relative z-10">
+        <div className={`w-8 h-8 rounded-full grid place-items-center ${finalized && isCorrect ? "bg-green-600 text-white" : "bg-gray-200 text-grayDark"}`}>
+          {idx}
+        </div>
+        <div className={`flex-1 font-medium ${labelColorClass}`}>
           {label}
         </div>
-      ) : null}
-    </div>
-    <div className="w-12 text-right font-bold text-gray-800">{percent}%</div>
-  </div>
-);
+        <div className="w-16 text-right font-semibold text-gray-800">
+          {percent}%
+        </div>
+      </div>
 
-/* slide-over panel used for chat / participants */
+      {/* inner fill — absolutely positioned, sits behind the top row */}
+      <div
+        aria-hidden
+        className={`absolute inset-y-0 left-0 rounded-l-md ${innerColorClass} opacity-90`}
+        style={{
+          width: `${percent}%`,
+          zIndex: 1,
+          transition: finalized ? "width 600ms ease-out, background-color 300ms" : "width 600ms cubic-bezier(.2,.8,.2,1)",
+          borderTopRightRadius: "8px",
+          borderBottomRightRadius: "8px",
+        }}
+      />
+      {/* subtle overlay to keep text readable on top of fill */}
+      <div className="absolute inset-0 z-20 pointer-events-none" />
+    </div>
+  );
+};
+
+/* SlidePanel — chat / participants */
 const SlidePanel = ({ tab, setTab, children, open }) => {
   if (!open) return null;
   return (
@@ -53,30 +88,27 @@ export default function TeacherLive() {
 
   // UI state
   const [panelTab, setPanelTab] = useState("Chat");
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false); // closed by default per your request
 
   const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [liveCounts, setLiveCounts] = useState({}); // counts updated live via poll_update
-  const [finalCounts, setFinalCounts] = useState(null); // once poll_results arrives, freeze here
+  const [liveCounts, setLiveCounts] = useState({}); // live updates
+  const [finalCounts, setFinalCounts] = useState(null); // final/frozen results
 
   const inputRef = useRef(null);
+  const chatListRef = useRef(null);
 
-  // Request latest history if page loaded without currentPoll
+  // Request history if we arrived here with no currentPoll (reconnect / hard refresh)
   useEffect(() => {
     if (!socket) return;
-    if (!currentPoll) {
-      console.log("TeacherLive: no currentPoll, requesting history fallback");
-      socket.emit("teacher_request_history");
-    }
+    if (!currentPoll) socket.emit("teacher_request_history");
   }, [socket, currentPoll]);
 
-  // Listen for poll lifecycle and history
+  // Listen for poll started and history fallback
   useEffect(() => {
     if (!socket) return;
 
     const onPollStarted = (poll) => {
-      console.log("TeacherLive: poll_started", poll);
       setCurrentPoll?.(poll);
       setLiveCounts({});
       setFinalCounts(null);
@@ -84,27 +116,19 @@ export default function TeacherLive() {
 
     const onHistory = (history) => {
       if (!currentPoll && Array.isArray(history) && history.length > 0) {
-        // Use most recent snapshot from history as fallback
         const snap = history[0];
-        console.log("TeacherLive: using latest history snapshot", snap);
-        // history snapshot shape in server: { id, question, timer, options, counts, createdAt }
-        // For display we prefer currentPoll shape => map accordingly
         const pollFromSnap = {
           question: snap.question,
           timer: snap.timer,
           options: snap.options,
         };
         setCurrentPoll?.(pollFromSnap);
-        // if snapshot includes counts, treat them as final
-        if (snap.counts) {
-          setFinalCounts(snap.counts);
-        }
+        if (snap.counts) setFinalCounts(snap.counts);
       }
     };
 
     socket.on("poll_started", onPollStarted);
     socket.on("history_data", onHistory);
-
     return () => {
       socket.off("poll_started", onPollStarted);
       socket.off("history_data", onHistory);
@@ -116,14 +140,10 @@ export default function TeacherLive() {
     if (!socket) return;
 
     const onUpdate = (counts) => {
-      // Only update liveCounts if finalCounts isn't set (soft-freeze)
-      if (!finalCounts) {
-        setLiveCounts(counts || {});
-      }
+      if (!finalCounts) setLiveCounts(counts || {});
     };
 
     const onResults = (counts) => {
-      // Freeze results (soft freeze)
       setFinalCounts(counts || {});
     };
 
@@ -143,7 +163,7 @@ export default function TeacherLive() {
     };
   }, [socket, finalCounts]);
 
-  // Build bars from either liveCounts or finalCounts (finalCounts wins if present)
+  // Build bars from either liveCounts or finalCounts (finalCounts wins)
   const totalVotes = useMemo(() => {
     const src = finalCounts ?? liveCounts;
     return Object.values(src || {}).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -151,23 +171,23 @@ export default function TeacherLive() {
 
   const bars = useMemo(() => {
     const opts = currentPoll?.options ?? [];
-    const src = finalCounts ?? liveCounts; // finalCounts freezes
+    const src = finalCounts ?? liveCounts;
     return opts.map((opt, i) => {
-      const key = String(i + 1); // server uses 1-based keys
+      const key = String(i + 1);
       const count = Number(src?.[key] ?? 0);
       const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
       return {
         idx: i + 1,
         label: opt?.text ?? `Option ${i + 1}`,
         percent: pct,
-        active: count > 0,
+        isCorrect: Boolean(opt?.correct),
       };
     });
   }, [currentPoll, liveCounts, finalCounts, totalVotes]);
 
   // Actions
   const showResults = () => {
-    if (!socket) return;
+    if (!socket || finalCounts) return;
     socket.emit("teacher_show_results");
   };
 
@@ -184,21 +204,37 @@ export default function TeacherLive() {
   };
 
   const goAskNew = () => {
-    // navigate to create screen to ask a new question
     navigate("/teacher/create");
   };
 
   // Auto-scroll chat when messages change
-  const chatListRef = useRef(null);
   useEffect(() => {
-    if (chatListRef.current) {
-      chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
-    }
+    if (chatListRef.current) chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
   }, [messages, panelOpen, panelTab]);
+
+  // Auto-focus chat input when panel opens on chat tab
+  useEffect(() => {
+    if (panelOpen && panelTab === "Chat") {
+      setTimeout(() => inputRef.current?.focus(), 80);
+    }
+  }, [panelOpen, panelTab]);
+
+  // Chat bubble helpers (left = other, right = teacher messages - we treat all as "other" here)
+  const renderChatMessage = (m, i) => {
+    // simple styling — teacher messages are not distinguished server-side; you can add sender checks if you like
+    return (
+      <div key={i} className="mb-3">
+        <div className="text-xs text-grayMid mb-1">{m.sender || "User"}</div>
+        <div className={`inline-block px-3 py-2 rounded-lg ${m.sender ? "bg-gray-800 text-white" : "bg-primaryLight text-white"}`}>
+          {m.text}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-white px-6 py-12 relative">
-      <div className="max-w-[760px] mx-auto">
+      <div className="max-w-[960px] mx-auto">
         <div className="text-2xl font-semibold mb-4">Question</div>
 
         <div className="w-full rounded-xl border border-gray-200 shadow-lg overflow-hidden">
@@ -206,16 +242,28 @@ export default function TeacherLive() {
             {currentPoll?.question ?? "Waiting for a poll to start..."}
           </div>
 
-          <div className="p-5">
-            {bars.length === 0 ? (
-              <div className="text-grayMid">No options yet.</div>
-            ) : (
-              bars.map((r) => <ChoiceRow key={r.idx} {...r} />)
-            )}
+          <div className="p-6">
+            {/* Outer container matches your screenshot: full-width card with inner rows */}
+            <div className="rounded-lg border border-gray-200 p-4 bg-white space-y-4">
+              {bars.length === 0 ? (
+                <div className="text-grayMid">No options yet.</div>
+              ) : (
+                bars.map((r) => (
+                  <ChoiceRow
+                    key={r.idx}
+                    idx={r.idx}
+                    label={r.label}
+                    percent={r.percent}
+                    finalized={Boolean(finalCounts)}
+                    isCorrect={r.isCorrect}
+                  />
+                ))
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-3 text-grayMid">
+        <div className="mt-6 flex items-center gap-4 text-grayMid">
           <div>
             Total votes: <span className="font-semibold text-grayDark">{totalVotes}</span>
           </div>
@@ -253,15 +301,7 @@ export default function TeacherLive() {
         {panelTab === "Chat" ? (
           <div className="flex flex-col h-full">
             <div ref={chatListRef} className="flex-1 space-y-3 overflow-auto pr-1">
-              {messages.map((m, i) => (
-                <div key={i} className="mb-2">
-                  <div className="text-xs text-grayMid mb-1">{m.sender || "User"}</div>
-                  <div className={`inline-block px-3 py-2 rounded-lg ${m.sender ? "bg-gray-800 text-white" : "bg-primaryLight text-white"}`}>
-                    {m.text}
-                  </div>
-                </div>
-              ))}
-              {messages.length === 0 && <div className="text-center text-grayMid">No messages yet — say hi 👋</div>}
+              {messages.length === 0 ? <div className="text-center text-grayMid">No messages yet — say hi 👋</div> : messages.map(renderChatMessage)}
             </div>
 
             <div className="mt-3 flex gap-2">
